@@ -1,4 +1,7 @@
 id=sing4magisk
 name=Sing4Magisk
-author=Asterisk4Magisk
+author=Adi Prasetya
+version=v0.2
+versionCode=20221229
 description=Sing, Dance, Rap, Basketball. Music!
+updateJson=https://raw.githubusercontent.com/adiprasetya/Sing4Magisk/main/Sing4Magisk.json

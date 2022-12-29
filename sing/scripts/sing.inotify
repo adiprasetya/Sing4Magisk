@@ -3,16 +3,25 @@
 inotify=`realpath $0`
 scripts_dir=`dirname ${inotify}`
 service="${scripts_dir}/sing.service"
-
+tproxy="${scripts_dir}/sing.tproxy"
+service_log="/data/adb/sing/run/service.log"
 events=$1
 monitor_dir=$2
 monitor_file=$3
 
+source /data/adb/sing/sing.config
+
 start_sing() {
-  ${service} start &>> /data/adb/sing/run/service.log &
+  ${service} start &&
+  if [ "${TPROXY}" = "true" ]; then
+    ${tproxy} enable
+  fi
 }
 
 stop_sing() {
+  if [ "${TPROXY}" = "true" ]; then
+    ${tproxy} disable
+  fi &&
   ${service} stop
 }
 
@@ -20,7 +29,7 @@ main() {
 if [ ! -f /data/adb/sing/manual ] ; then
   if [ "${monitor_file}" = "disable" ] ; then
     if [ "${events}" = "d" ] ; then
-      start_sing
+      start_sing &> ${service_log} &
     elif [ "${events}" = "n" ] ; then
       stop_sing
     fi

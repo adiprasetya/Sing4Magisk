@@ -6,7 +6,7 @@
 - If you really don't know how to configure this module, you might need apps like v2rayNG, SagerNet etc.
 
 # Module config
-template: `sing/etc/sing.config`
+`/data/adb/sing/etc/sing.config`
 Module config use shell variable
 
 # Usage

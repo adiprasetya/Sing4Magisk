@@ -1,0 +1,308 @@
+#!/system/bin/sh
+
+export PATH=/data/data/com.termux/files/usr/bin:$PATH
+module_path="/data/adb/sing"
+table_id="233"
+sing_gid="3005"
+proxy_port="65535"
+proxy2_port="65534"
+mark_id="1111"
+mark2_id="1112"
+probe="no"
+proxy2_enable=0
+proxy2_list=()
+iptables="iptables -w 100"
+
+source $module_path/sing.config
+
+intranet=(0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.0.0.0/24 192.0.2.0/24 192.88.99.0/24 192.168.0.0/16 198.51.100.0/24 203.0.113.0/24 224.0.0.0/4 240.0.0.0/4 255.255.255.255/32)
+intranet6=(::/128 ::1/128 ::ffff:0:0/96 100::/64 64:ff9b::/96 2001::/32 2001:10::/28 2001:20::/28 2001:db8::/32 2002::/16 fc00::/7 fe80::/10 ff00::/8)
+
+# Special AIDs (include/private/android_filesystem_config.h):
+#  0 root; 1000 system_server; 2000 adb; 9997 everybody; 9999 nobody;
+#  1051 netd; 1052 dnsmasq; 3003 AF_INET; 3004 inet; 3005 net_admin;
+#  2900-2999 5000-5999 OEM; 10000+ APP; 99000-99999 ISOLATE; 100000 USER; 50000-59999 SHARED_GID
+AIDs=(1001 1002 1003 1004 1005 1006 1007 1008 1009 1010 1011 1012 1013 1014 1015 1016 1017 1018 1019 1020 1021 1022 1023 1024 1025 1026 1027 1028 1029 1030 1031 1032 1033 1034 1035 1036 1037 1038 1039 1040 1041 1042 1043 1044 1045 1046 1047 1048 1049 1050 2001 2002 3001 3002 3003 3004 3005 3006 3007 3008 3009 3010 9997 9998 9999)
+
+probe_alive() {
+    [ -f ${pid_file} ] && cmd_file="/proc/$(cat ${pid_file})/cmdline" || return 1
+    [ -f ${cmd_file} ] && grep -q ${bin_path} ${cmd_file} && return 0 || return 1
+}
+
+display_pid() {
+    if probe_alive; then
+        echo "[Info]: ${bin_name} service is running. ( PID: $(cat ${pid_file}) )"
+        return 0
+    else
+        echo "[Info]: ${bin_name} service is stopped."
+        return 1
+    fi
+}
+
+start_service() {
+    if probe_alive; then
+        echo "[Info]: ${bin_name} service is running. ( PID: $(cat ${pid_file}) )"
+    else
+        echo "[Info]: Starting ${bin_name} service."
+        nohup ${bin_path} &>${error_log} &
+        echo -n $! >${pid_file}
+        if probe_alive; then
+            echo "[Warning]: ${bin_name} service is running ( PID: $(cat ${pid_file}) )"
+        else
+            echo "[Error]: Start ${bin_name} service Failed."
+            rm -f ${pid_file}
+        fi
+    fi
+}
+
+stop_service() {
+    if display_pid; then
+        echo "[Info]: Stopping ${bin_name} service."
+        kill $(cat ${pid_file})
+        sleep 1
+        display_pid
+    fi
+    rm -f ${pid_file}
+}
+
+add_route() {
+    ip rule add fwmark ${mark_id} table ${table_id}
+    [ $proxy2_enable -eq 1 ] && ip rule add fwmark ${mark2_id} table ${table_id}
+    ip route add local default dev lo table ${table_id}
+    if [  "${ipv6}" = "true" ]; then
+        ip -6 rule add fwmark ${mark_id} table ${table_id}
+        [ $proxy2_enable -eq 1 ] && ip -6 rule add fwmark ${mark2_id} table ${table_id}
+        ip -6 route add local default dev lo table ${table_id}
+    fi
+}
+
+del_route() {
+    ip rule del fwmark ${mark_id} table ${table_id}
+    ip rule del fwmark ${mark2_id} table ${table_id}
+    ip route flush table ${table_id}
+    if [ "${ipv6}" = "true" ]; then
+        ip -6 rule del fwmark ${mark_id} table ${table_id}
+        ip -6 rule del fwmark ${mark2_id} table ${table_id}
+        ip -6 route flush table ${table_id}
+    fi
+}
+
+create_mangle_iptables() {
+    echo "[Info]: creating mangle chain"
+    ${iptables} -t mangle -N SING
+
+    # Bypass other if
+    #  Notice: Some interface is named with r_ / oem / nm_ / qcom_
+    #          It might need more complicated solution.
+    ${iptables} -t mangle -I SING -i rmnet_data+ -j RETURN
+    ${iptables} -t mangle -I SING -i ccmni+ -j RETURN
+
+    # Bypass intranet
+    if [ "${iptables}" = "ip6tables -w 100" ]; then
+        for subnet6 in ${intranet6[@]}; do
+            ${iptables} -t mangle -A SING -d ${subnet6} -p udp ! --dport 53 -j RETURN
+            ${iptables} -t mangle -A SING -d ${subnet6} ! -p udp -j RETURN
+        done
+    else
+        for subnet in ${intranet[@]}; do
+            ${iptables} -t mangle -A SING -d ${subnet} -p udp ! --dport 53 -j RETURN
+            ${iptables} -t mangle -A SING -d ${subnet} ! -p udp -j RETURN
+        done
+    fi
+
+    # Allow ap interface
+    #  Notice: Old android device may only have one wlan interface.
+    #          Some new android device have multiple wlan interface like wlan0(for internet), wlan1(for AP).
+    for ap in ${ap_list[@]}; do
+        ${iptables} -t mangle -A SING -p tcp -i ${ap} -j TPROXY --on-port ${proxy_port} --tproxy-mark ${mark_id}
+        ${iptables} -t mangle -A SING -p udp -i ${ap} -j TPROXY --on-port ${proxy_port} --tproxy-mark ${mark_id}
+    done
+
+    # Setup tproxy
+    [ $proxy2_enable -eq 1 ] && ${iptables} -t mangle -A SING -p tcp -i lo -m mark --mark ${mark2_id} -j TPROXY --on-port ${proxy_port} --tproxy-mark ${mark2_id}
+    [ $proxy2_enable -eq 1 ] && ${iptables} -t mangle -A SING -p udp -i lo -m mark --mark ${mark2_id} -j TPROXY --on-port ${proxy_port} --tproxy-mark ${mark2_id}
+    ${iptables} -t mangle -A SING -p tcp -i lo -m mark --mark ${mark_id} -j TPROXY --on-port ${proxy_port} --tproxy-mark ${mark_id}
+    ${iptables} -t mangle -A SING -p udp -i lo -m mark --mark ${mark_id} -j TPROXY --on-port ${proxy_port} --tproxy-mark ${mark_id}
+
+    ${iptables} -t mangle -A PREROUTING -j SING
+
+    ${iptables} -t mangle -N SING_LOCAL
+    ${iptables} -t mangle -I PREROUTING -j SING_LOCAL
+
+    create_proxy_iptables
+}
+
+create_proxy_iptables() {
+    echo "[Info]: creating proxy"
+    ${iptables} -t mangle -N PROXY
+
+    # Bypass ignored interfaces
+    for ignore in ${ignore_out_list[@]}; do
+        ${iptables} -t mangle -A PROXY -o ${ignore} -j RETURN
+    done
+
+    # Bypass AIDs
+    for AID in ${AIDs[@]}; do
+        ${iptables} -t mangle -A PROXY -m owner --uid-owner ${AID} -j RETURN
+    done
+
+    # Bypass Sing itself
+    ${iptables} -t mangle -A PROXY -m owner --uid-owner 0 --gid-owner ${sing_gid} -j RETURN
+
+    # Bypass intranet
+    if [ "${iptables}" = "ip6tables -w 100" ]; then
+        for subnet6 in ${intranet6[@]}; do
+            ${iptables} -t mangle -A PROXY -d ${subnet6} -p udp ! --dport 53 -j RETURN
+            ${iptables} -t mangle -A PROXY -d ${subnet6} ! -p udp -j RETURN
+        done
+    else
+        for subnet in ${intranet[@]}; do
+            ${iptables} -t mangle -A PROXY -d ${subnet} -p udp ! --dport 53 -j RETURN
+            ${iptables} -t mangle -A PROXY -d ${subnet} ! -p udp -j RETURN
+        done
+    fi
+    # Setup proxy
+    if [ "${proxy_mode}" = "ALL" ]; then
+        # Route Everything
+        echo "[Info]: route all apps"
+        ${iptables} -t mangle -A PROXY -p tcp -j MARK --set-mark ${mark_id}
+        ${iptables} -t mangle -A PROXY -p udp -j MARK --set-mark ${mark_id}
+    elif [ "${proxy_mode}" = "blacklist" ]; then
+        # Bypass apps
+        echo "[Info]: blacklist app mode" 
+        for appid in ${uid_list[@]}; do
+            ${iptables} -t mangle -I PROXY -m owner --uid-owner ${appid} -p udp ! --dport 53 -j RETURN
+            ${iptables} -t mangle -I PROXY -m owner --uid-owner ${appid} ! -p udp -j RETURN
+        done
+        # Allow !app
+        ${iptables} -t mangle -A PROXY -p tcp -j MARK --set-mark ${mark_id}
+        ${iptables} -t mangle -A PROXY -p udp -j MARK --set-mark ${mark_id}
+    elif [ "${proxy_mode}" = "whitelist" ]; then
+        # Route apps to Sing
+        echo "[Info]: whitelist app mode" 
+        for appid in ${uid_list[@]}; do
+            ${iptables} -t mangle -A PROXY -p tcp -m owner --uid-owner ${appid} -j MARK --set-mark ${mark_id}
+            ${iptables} -t mangle -A PROXY -p udp -m owner --uid-owner ${appid} -j MARK --set-mark ${mark_id}
+        done
+        # Allow Sing4Magisk update through Magisk Manager
+        ${iptables} -t mangle -A PROXY -p tcp -m owner --uid-owner 0 -j MARK --set-mark ${mark_id}
+        ${iptables} -t mangle -A PROXY -p udp -m owner --uid-owner 0 -j MARK --set-mark ${mark_id}
+        # Route dnsmasq to Sing
+        ${iptables} -t mangle -A PROXY -p tcp -m owner --uid-owner 1052 -j MARK --set-mark ${mark_id}
+        ${iptables} -t mangle -A PROXY -p udp -m owner --uid-owner 1052 -j MARK --set-mark ${mark_id}
+        # Route DNS request to Sing
+        ${iptables} -t mangle -A PROXY -p udp --dport 53 -j MARK --set-mark ${mark_id}
+    fi
+
+    # Bypass and transfer proxy2
+    if [ ! $proxy2_enable -eq 0 ]; then
+        for proxy2id in ${proxy2_list[@]}; do
+            ${iptables} -t mangle -A PROXY -p tcp -m owner --uid-owner ${proxy2id} -j MARK --set-mark ${mark2_id}
+            ${iptables} -t mangle -A PROXY -p udp -m owner --uid-owner ${proxy2id} -j MARK --set-mark ${mark2_id}
+        done
+    fi
+
+    ${iptables} -t mangle -A OUTPUT -j PROXY
+}
+
+clean_mangle_iptables() {
+    echo "[Info]: cleaning mangle iptables"
+    ${iptables} -t mangle -D OUTPUT -j PROXY
+    ${iptables} -t mangle -D PREROUTING -j SING
+    ${iptables} -t mangle -D PREROUTING -j SING_LOCAL
+    ${iptables} -t mangle -F PROXY
+    ${iptables} -t mangle -F SING
+    ${iptables} -t mangle -F SING_LOCAL
+    ${iptables} -t mangle -X PROXY
+    ${iptables} -t mangle -X SING
+    ${iptables} -t mangle -X SING_LOCAL
+}
+
+probe_proxy_mode() {
+    if [[ "${proxy_mode}" != "blacklist" ]] && [[ "${proxy_mode}" != "whitelist" ]]; then
+        proxy_mode=ALL
+    fi
+    probe="done"
+}
+
+disable_ipv6() {
+  for i in ${ipv6_interface[@]}; do
+    if [[ -d "/proc/sys/net/ipv6/conf/$i" ]]; then
+      echo 0 > "/proc/sys/net/ipv6/conf/all/accept_ra"
+      echo 0 > "/proc/sys/net/ipv6/conf/$i/accept_ra"
+      echo 1 > "/proc/sys/net/ipv6/conf/all/disable_ipv6"
+      echo 1 > "/proc/sys/net/ipv6/conf/default/disable_ipv6"
+      echo 1 > "/proc/sys/net/ipv6/conf/$i/disable_ipv6"
+    fi
+  done
+}
+
+enable_ipv6() {
+  for i in ${ipv6_interface[@]}; do
+    if [[ -d "/proc/sys/net/ipv6/conf/$i" ]]; then
+      echo 1 > "/proc/sys/net/ipv6/conf/all/accept_ra"
+      echo 1 > "/proc/sys/net/ipv6/conf/$i/accept_ra"
+      echo 0 > "/proc/sys/net/ipv6/conf/all/disable_ipv6"
+      echo 0 > "/proc/sys/net/ipv6/conf/default/disable_ipv6"
+      echo 0 > "/proc/sys/net/ipv6/conf/$i/disable_ipv6"
+    fi
+  done
+}
+
+disable_proxy() {
+    echo "[Debug]: probing proxy mode"
+    probe_proxy_mode
+
+    echo "[Debug]: rollback route settings"
+    del_route 2>/dev/null
+    iptables="iptables -w 100"
+
+    echo "[Debug]: disable ipv4 proxy"
+    clean_mangle_iptables 2>/dev/null
+
+    enable_ipv6 2>/dev/null
+
+    if [ "${ipv6}" = "true" ]; then
+        echo "[Debug]: disable ipv6 proxy"
+        iptables="ip6tables -w 100"
+        # stop_service
+        clean_mangle_iptables 2>/dev/null
+    fi
+}
+
+enable_proxy() {
+    echo "[Debug]: probing proxy mode"
+
+    if [ "${probe}" = no ]; then
+        probe_proxy_mode
+    fi
+
+    echo "[Debug]: apply route settings"
+    add_route 2>/dev/null
+    iptables="iptables -w 100"
+
+    echo "[Debug]: enable ipv4 proxy"
+    create_mangle_iptables
+
+    if [ "${ipv6}" = "true" ]; then
+        echo "[Debug]: enable ipv6 proxy"
+        iptables="ip6tables -w 100"
+        create_mangle_iptables
+        # start_service
+    else
+        disable_ipv6 2>/dev/null
+    fi
+}
+
+case "$1" in
+    enable|renew)
+        disable_proxy
+        enable_proxy
+        ;;
+    disable)
+        disable_proxy
+        ;;
+    *)
+        echo "$0:  usage:  $0 {enable|disable|renew}"
+        ;;
+esac

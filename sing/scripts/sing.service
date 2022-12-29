@@ -7,9 +7,9 @@ config="config.json"
 source ${module_path}/sing.config
 bin_path="${module_path}/bin/${bin_name}-box"
 pid_file="${module_path}/run/${bin_name}.pid"
-error_log="${module_path}/run/service.log"
+error_log="${module_path}/run/error.log"
 conf_file="${module_path}/confs/${config}"
-bin_opts="-D ${module_path}/assets -c ${conf_file} run"
+bin_opts="--disable-color -D ${module_path}/assets -c ${conf_file} run"
 sing_gid="3005"
 
 probe_sing_alive() {
@@ -57,7 +57,7 @@ start_service() {
     echo "[Info]: Starting ${bin_name} service."
     mkdir -p ${module_path}/run
     ulimit -SHn 1000000
-    nohup ${magisk_busybox} setuidgid 0:${sing_gid} ${bin_path} ${bin_opts} 2>&1 > ${error_log} &
+    nohup ${magisk_busybox} setuidgid 0:${sing_gid} ${bin_path} ${bin_opts} &>${error_log} &
     echo -n $! > ${pid_file}
     if wait_sing_listen ; then
       echo "[Info]: ${bin_name} service is running. ( PID: `cat ${pid_file}` )"

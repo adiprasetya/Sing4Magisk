@@ -5,9 +5,14 @@ bin_name="sing"
 module_path="/data/adb/${bin_name}"
 core="update"
 asset="update"
+busybox="/data/adb/magisk/busybox"
+sing_config="${module_path}/sing.config"
+sing_config_tmp="$TMPDIR/sing.config"
 
-[ -f /sdcard/sing.config ] && source /sdcard/sing.config
-[ -f ${module_path}/sing.config ] && source ${module_path}/sing.config
+if [ -f ${sing_config} ]; then
+  head ${sing_config} > ${sing_config_tmp}
+  source ${sing_config_tmp}
+fi
 
 if [ $BOOTMODE ! = true ] ; then
   core="custom"
@@ -35,17 +40,17 @@ github_api="https://api.github.com/repos/SagerNet/sing-box/releases"
   esac
 
   if [ "${core}" = "update" ] ; then
-    latest_version=`/data/adb/magisk/busybox wget -qO- ${github_api} | grep -m 1 "tag_name" | awk '{print $2}'`
+    latest_version=`$busybox wget -qO- ${github_api} | grep -m 1 "tag_name" | awk '{print $2}'`
     latest_version=${latest_version:2:-2}
     download_file="sing-box-${latest_version}-${version}.tar.gz"
     download_path="/sdcard/Download/${download_file}"
     if [ "$latest_version" = "" ] ; then
-      ui_print "versionCheck err"
+      ui_print "versionCheck error"
       abort
     fi
-    /data/adb/magisk/busybox wget "${sing_link}/download/v${latest_version}/${download_file}" -O "${download_path}" >&2
+    $busybox wget "${sing_link}/download/v${latest_version}/${download_file}" -O "${download_path}" >&2
     if [ "$?" != "0" ] ; then
-      ui_print "Download err"
+      ui_print "Download error"
       abort
     fi
   else
@@ -53,28 +58,28 @@ github_api="https://api.github.com/repos/SagerNet/sing-box/releases"
       download_file=$(ls /sdcard/Download | grep sing-box | grep "${version}.tar.gz")
       download_path="/sdcard/Download/${download_file}"
     else
-      ui_print "Offline mode err"
+      ui_print "Offline mode error"
       abort
     fi
   fi
 
 
   if [ "${asset}" = "update" ] ; then
-    /data/adb/magisk/busybox wget https://github.com/SagerNet/sing-geoip/releases/latest/download/geoip.db -O /sdcard/Download/geoip.db >&2
+    $busybox wget https://github.com/SagerNet/sing-geoip/releases/latest/download/geoip.db -O /sdcard/Download/geoip.db >&2
     if [ "$?" != "0" ] ; then
-      ui_print "Download err"
+      ui_print "Download error"
       abort
     fi
-    /data/adb/magisk/busybox wget https://github.com/SagerNet/sing-geosite/releases/latest/download/geosite.db -O /sdcard/Download/geosite.db >&2
+    $busybox wget https://github.com/SagerNet/sing-geosite/releases/latest/download/geosite.db -O /sdcard/Download/geosite.db >&2
     if [ "$?" != "0" ] ; then
-      ui_print "Download err"
+      ui_print "Download error"
       abort
     fi
   else
     if [ -f /sdcard/Download/geoip.db ] && [ -f /sdcard/Download/geosite.db ] ; then
       ui_print "Assets found"
     else
-      ui_print "Offline mode err"
+      ui_print "Offline mode error"
       abort
     fi
   fi
@@ -93,11 +98,15 @@ fi
 unzip -j -o "${ZIPFILE}" 'sing4magisk_service.sh' -d /data/adb/service.d >&2
 unzip -j -o "${ZIPFILE}" 'uninstall.sh' -d $MODPATH >&2
 
-set_perm  ${module_path}/scripts/sing.service    0  0  0755
-set_perm  /data/adb/service.d/sing4magisk_service.sh    0  0  0755
-set_perm  $MODPATH/uninstall.sh                         0  0  0755
-set_perm_recursive  ${module_path}/scripts              0  0  0755
-set_perm_recursive  ${module_path}/bin                  0  0  0755
+set_perm_recursive $MODPATH 0 0 0755 0644
+set_perm_recursive ${module_path}/ 0 0 0755 0644
+set_perm_recursive ${module_path}/scripts/ 0 0 0755 0700
+set_perm_recursive ${module_path}/bin/ 0 0 0755 0700
+
+set_perm /data/adb/service.d/sing4magisk_service.sh 0 0 0700
+
+chmod ugo+x ${module_path}/scripts/*
+chmod ugo+x ${module_path}/bin/*
 
 # stop service
 # ${module_path}/scripts/sing.service stop
@@ -115,8 +124,4 @@ cp /sdcard/Download/geosite.db ${module_path}/assets
 unzip -j -o "${ZIPFILE}" "sing/etc/sing.config" -d ${module_path} >&2
 [ -f ${conf_file} ] || \
 unzip -j -o "${ZIPFILE}" "sing/etc/confs/*" -d ${module_path}/confs >&2
-
 unzip -j -o "${ZIPFILE}" "module.prop" -d $MODPATH >&2
-echo -n "version=Module v0.1, Core " >> $MODPATH/module.prop
-echo ${latest_version} >> $MODPATH/module.prop
-echo "versionCode=20220914" >> $MODPATH/module.prop
